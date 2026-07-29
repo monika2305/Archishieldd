@@ -43,7 +43,7 @@ class SessionState:
         self.user_context = {}
         self.logged_in = False
         self.analysis = {}
-        self.temp_file_path = "temp.ifc"
+        self.temp_file_path = "/tmp/temp.ifc"
         self.corrected_ifc_bytes = None
         self.corrected_fix_count = 0
         self.corrected_pset_count = 0
