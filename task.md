@@ -1,0 +1,56 @@
+- [x] Delete existing Backend directory
+- [x] Implement Backend (FastAPI)
+    - [x] Create folder structure and setup files (`requirements.txt`, `.env`)
+    - [x] Core configuration and schemas
+    - [x] IFC parser service (STEP checks, 5-level metrics, exporter source detection)
+    - [x] Corrections service (in-place class swap, Pset/Material injection)
+    - [x] BCF, PDF and AI assistant services
+    - [x] API routes (Auth, Upload, Analysis, Corrections, PDF, BCF, Compare, Chat)
+    - [x] Implement dynamic 3D BIM Viewer and 2D Heatmap HTML/JS visualization endpoints
+    - [x] Fix NameError `classify_proxy` in main.py for 3D/2D Heatmap endpoints
+    - [x] Create custom rule validation compliance runner service (`rule_validator.py`)
+    - [x] Implement `/api/rules/validate` and `/api/rules/pdf-report` POST routes
+    - [x] Make version comparison endpoint accept side-by-side file_a and file_b uploads
+    - [x] Implement Cloud Library model loader REST API endpoint `/api/library/load`
+    - [x] Implement Supabase storage client integration (`supabase_service.py`) for file list, upload, delete, and download operations
+- [x] Implement Frontend (Vite + React + Vanilla CSS)
+    - [x] Initialize Vite + React project
+    - [x] Build premium styling system (`index.css` with dark glass theme)
+    - [x] Create Home dashboard (Upload, Exporter, STEP checks)
+    - [x] Remove Model Readiness Score and Key Business Issues sections from Home Page
+    - [x] Integrate IFC Relationships Table at bottom of Home Page
+    - [x] Create Model Analysis tabs (Proxy, Pset, Geometry)
+    - [x] Rebuild Proxy tab with 4 metric cards and segmented progress bar breakdown
+    - [x] Rebuild Pset tab with type summary progress bars and element search
+    - [x] Rebuild Geometry tab with 5 detection passes cards and recovery plan list
+    - [x] Make all Model Analysis tab metrics responsive (grid wraps on narrow viewports)
+    - [x] Make data-table container horizontally scrollable (`overflow: auto` and `max-width: 100%`) to fix Geometry tab page overflow cutoff
+    - [x] Integrate high-fidelity iframe visualizers in Visualizations page
+    - [x] Redesign Storey Quality dashboard with scorecards, floor dropdown filter elements inspector, and summary table
+    - [x] Create Validation & Compliance (Rule Validation, NBC Compliance)
+    - [x] Implement complete rule selection library, custom rule inputs list, run trigger results table, and CSV/PDF downloads
+    - [x] Implement section-wise collapsible accordions for NBC Compliance checks
+    - [x] Create Corrections Dashboard (Smart suggestions, reclassification, live score comparison, download)
+    - [x] Redesign layout with metrics headers, filter controls table, best suggestion checkboxes, and a dedicated download card at the bottom
+    - [x] Refine Corrections Dashboard layout to match Streamlit high-fidelity columns (Proxy table headers, Pset card inputs, and warning alerts)
+    - [x] Create Reports & Export (Model Score breakdown, BCF, Version Comparison)
+    - [x] Redesign Model Score card, grade progress bar, and 4-column breakdown cards layout
+    - [x] Redesign BCF Generator auto-generate settings, author inputs, selection categories list, and manual issue queue
+    - [x] Redesign Version Comparison older and newer side-by-side file dropzones, project overlap banners, and color-coded change sheets
+    - [x] Create Ask Your Model Chat page
+    - [x] Design premium Landing Page for ArchiShield (`LandingPage.jsx`)
+        - [x] Create Apple/Linear-inspired dark theme showcase
+        - [x] Integrate rotating 3D CSS wireframe tower model and vertical AI scan line animation
+        - [x] Place Apple-style sticky header with glass blur navigation
+        - [x] Integrate features showcase cards, chronological pipeline workflow, key benefits responsive grid, technology badges, and minimal footer
+    - [x] Implement Cloud IFC Library explorer (`CloudLibrary.jsx`)
+        - [x] Fetch file list from private Supabase bucket and display sizes, dates, and names
+        - [x] Integrate direct drag-and-drop file upload, file delete, and workspace loading actions
+    - [x] Implement workspace sidebar navigation shell
+        - [x] Add sticky left navigation with customizable icons
+        - [x] Integrate "Back" button at top of sidebar to return to landing page
+        - [x] Render Streamlit-style LoginPage inside workspace shell with validation banners and sample model downloads when logged out
+        - [x] Add drag-and-drop upload functionality to Home Page file selector card with cloud uploaded alert banner
+- [x] Verify functionality
+    - [x] Run test scripts on backend parsing
+    - [x] Run local servers and test end-to-end user flows

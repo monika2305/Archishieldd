@@ -1,0 +1,6 @@
+streamlit
+ifcopenshell
+pandas
+fpdf
+groq
+supabase
