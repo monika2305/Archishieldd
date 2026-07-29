@@ -9,3 +9,4 @@ fpdf2
 groq
 python-dotenv
 numpy
+supabase
