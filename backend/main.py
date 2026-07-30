@@ -522,6 +522,18 @@ def download_corrected_ifc():
         headers={"Content-Disposition": "attachment; filename=corrected_model.ifc"}
     )
 
+@app.get("/api/analyze/download-sample")
+def download_sample_ifc():
+    sample_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_model.ifc")
+    if not os.path.exists(sample_path):
+        raise HTTPException(status_code=404, detail="Sample model file not found on server.")
+    
+    return FileResponse(
+        sample_path,
+        media_type="application/octet-stream",
+        filename="sample_model.ifc"
+    )
+
 @app.get("/api/analyze/pdf-report")
 def download_pdf_report():
     if not state.analysis:
