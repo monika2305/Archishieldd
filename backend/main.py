@@ -994,18 +994,22 @@ def download_rules_pdf_report(req: RuleValidationRequest):
             "Medium": (31, 111, 235),
             "Low": (35, 134, 54)
         }
+        
+        def safe_str(val):
+            return str(val).encode("latin-1", errors="replace").decode("latin-1")
+            
         for i, r in enumerate(results[:2000]):
             fill = i % 2 == 0
             pdf.set_fill_color(248, 250, 255) if fill else pdf.set_fill_color(255, 255, 255)
             sr, sg, sb = SEV_RGB.get(r["Severity"], (60, 60, 60))
             pdf.set_text_color(sr, sg, sb)
-            pdf.cell(12, 5, r["Rule ID"], border="B", fill=fill)
-            pdf.cell(16, 5, r["Severity"], border="B", fill=fill)
+            pdf.cell(12, 5, safe_str(r["Rule ID"]), border="B", fill=fill)
+            pdf.cell(16, 5, safe_str(r["Severity"]), border="B", fill=fill)
             pdf.set_text_color(40, 40, 40)
-            pdf.cell(28, 5, r["Category"][:18], border="B", fill=fill)
-            pdf.cell(50, 5, r["Rule"][:30], border="B", fill=fill)
-            pdf.cell(35, 5, (r["Element"] or "")[:20], border="B", fill=fill)
-            pdf.cell(57, 5, (r["Message"] or "")[:38], border="B", fill=fill, ln=True)
+            pdf.cell(28, 5, safe_str(r["Category"][:18]), border="B", fill=fill)
+            pdf.cell(50, 5, safe_str(r["Rule"][:30]), border="B", fill=fill)
+            pdf.cell(35, 5, safe_str((r["Element"] or "")[:20]), border="B", fill=fill)
+            pdf.cell(57, 5, safe_str((r["Message"] or "")[:38]), border="B", fill=fill, ln=True)
             
         if len(results) > 2000:
             pdf.set_font("Arial", "I", 8)

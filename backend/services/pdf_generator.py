@@ -19,7 +19,7 @@ class ArchiShieldPDF(FPDF):
         self.set_y(-15)
         self.set_font("Arial", "I", 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f"Page {self.page_no()}/{{nb}} | Confidential — ArchiShield Audit Report", align="C")
+        self.cell(0, 10, f"Page {self.page_no()}/{{nb}} | Confidential - ArchiShield Audit Report", align="C")
 
 def safe_str(val):
     return str(val).encode("latin-1", errors="replace").decode("latin-1")
