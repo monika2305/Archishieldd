@@ -109,6 +109,15 @@ export default function HomeDashboard({
         body: formData
       });
       setUploadProgress(80);
+      if (!res.ok) {
+        let errDetail = "Server returned status " + res.status;
+        try {
+          const errData = await res.json();
+          if (errData.detail) errDetail = errData.detail;
+        } catch (_) {}
+        alert("Upload failed: " + errDetail);
+        return;
+      }
       const data = await res.json();
       setUploadProgress(100);
       if (data.status === "success") {
@@ -118,10 +127,11 @@ export default function HomeDashboard({
         }
         onUploadSuccess();
       } else {
-        alert("Parsing failed: " + data.detail);
+        alert("Parsing failed: " + (data.detail || "Unknown error"));
       }
     } catch (err) {
-      alert("Connection to backend lost.");
+      console.error("Upload error:", err);
+      alert("Connection to backend failed. Please check network connectivity or wait 30 seconds if backend is waking up on Render.");
     } finally {
       setUploading(false);
       setUploadProgress(0);

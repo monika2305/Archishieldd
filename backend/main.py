@@ -37,12 +37,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS setup
+# CORS setup - Allow all production origins (Vercel, Render, local)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_origin_regex=r"^https?://.*$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
