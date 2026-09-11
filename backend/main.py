@@ -973,14 +973,32 @@ def query_assistant(req: QueryRequest):
     return {"question": req.question, "answer": ans}
 
 from fastapi.responses import HTMLResponse
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
+
+def _find_file_path(filename: str, relative_subpath: str = "legacy_pages") -> Optional[Path]:
+    candidates = [
+        BASE_DIR / relative_subpath / filename,
+        BASE_DIR / filename,
+        ROOT_DIR / relative_subpath / filename,
+        ROOT_DIR / filename,
+        Path(r"c:\Users\Dell\OneDrive\Desktop\BIM6") / relative_subpath / filename,
+        Path(r"c:\Users\Dell\OneDrive\Desktop\BIM6") / filename,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 @app.get("/api/visualize/3d", response_class=HTMLResponse)
 def get_3d_visualizer():
-    path = r"c:\Users\Dell\OneDrive\Desktop\BIM6\legacy_pages\3_🧊_3D_BIM_Viewer.py"
-    if not os.path.exists(path):
+    target_path = _find_file_path("3_🧊_3D_BIM_Viewer.py", "legacy_pages")
+    if not target_path or not target_path.exists():
         raise HTTPException(status_code=404, detail="3D viewer template file not found.")
     
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     start_tag = 'HTML = r"""'
@@ -1006,11 +1024,11 @@ def get_3d_visualizer():
 
 @app.get("/api/visualize/heatmap", response_class=HTMLResponse)
 def get_heatmap_visualizer():
-    path = r"c:\Users\Dell\OneDrive\Desktop\BIM6\legacy_pages\4_🔥_Issue_Heatmap.py"
-    if not os.path.exists(path):
+    target_path = _find_file_path("4_🔥_Issue_Heatmap.py", "legacy_pages")
+    if not target_path or not target_path.exists():
         raise HTTPException(status_code=404, detail="Heatmap template file not found.")
     
-    with open(path, "r", encoding="utf-8") as f:
+    with open(target_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     start_tag = 'heatmap_html = f"""'
@@ -1205,11 +1223,11 @@ async def load_library_model(req: Dict[str, str]):
             with open(state.temp_file_path, "wb") as f:
                 f.write(content)
         else:
-            workspace_sample = r"c:\Users\Dell\OneDrive\Desktop\BIM6\sample_model.ifc"
-            if not os.path.exists(workspace_sample):
+            sample_path = _find_file_path("sample_model.ifc", "")
+            if not sample_path or not sample_path.exists():
                 raise HTTPException(status_code=400, detail="Sample project file not found on server workspace.")
             import shutil
-            shutil.copy(workspace_sample, state.temp_file_path)
+            shutil.copy(str(sample_path), state.temp_file_path)
             
         state.analysis = parse_ifc_file(state.temp_file_path)
         state.corrected_ifc_bytes = None
