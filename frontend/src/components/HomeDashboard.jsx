@@ -62,7 +62,7 @@ export default function HomeDashboard({
         setUserContext(data.context);
       }
     } catch (err) {
-      alert("Backend server not running on http://localhost:8000. Start the backend first!");
+      alert(`Backend server not running on ${API_BASE_URL}. Start the backend first!`);
     }
   };
 

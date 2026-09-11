@@ -8,6 +8,7 @@ import ReportsExport from "./components/ReportsExport";
 import AskModel from "./components/AskModel";
 import LandingPage from "./components/LandingPage";
 import CloudLibrary from "./components/CloudLibrary";
+import AutomationCenter from "./components/AutomationCenter";
 import { API_BASE_URL } from "./config";
 
 export default function App() {
@@ -120,6 +121,7 @@ export default function App() {
     { id: "Reports & Export", name: "Reports & Export", icon: "📁" },
     { id: "Cloud Library", name: "cloud library", icon: "☁️" },
     { id: "Ask Your Model", name: "Ask Your Model", icon: "💬" },
+    { id: "Automation", name: "Automation Center", icon: "⚡" },
   ];
 
   if (!showPlatform) {
@@ -368,6 +370,10 @@ export default function App() {
 
               {activeNav === "Ask Your Model" && (
                 <AskModel analysis={analysis} />
+              )}
+
+              {activeNav === "Automation" && (
+                <AutomationCenter analysis={analysis} userContext={userContext} />
               )}
             </>
           )}

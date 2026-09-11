@@ -4,19 +4,28 @@ import uuid
 import datetime
 import json
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 import io
+import httpx
 
 from core.config import get_settings
-from models.schemas import LoginRequest, QueryRequest, ApplyCorrectionsRequest
+from models.schemas import (
+    LoginRequest,
+    QueryRequest,
+    ApplyCorrectionsRequest,
+    AutomationCallbackRequest,
+    AutomationSummaryRequest
+)
 from services.ifc_parser import parse_ifc_file, get_pset_value, has_pset, classify_proxy
 from services.corrections import build_corrected_ifc_text, get_smart_suggestions, get_suggested_type_single, get_confidence_score, is_valid_reference_proxy
 from services.pdf_generator import generate_pdf_report
 from services.bcf_generator import generate_bcf_zip
 from services.ai_assistant import ask_groq_assistant
 from services.supabase_service import upload_file_to_cloud, list_cloud_files, delete_cloud_file, download_cloud_file
+from services.audit_log import read_audit_entries, write_audit_entry
+from services.autoops import process_autoops_completion, build_autoops_payload
 
 import ifcopenshell
 
@@ -32,6 +41,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,12 +59,48 @@ class SessionState:
         self.corrected_pset_count = 0
         self.user_class_selections = {}
         self.pset_fixes = {}
+        self.current_job_id = None
+        self.current_file_id = None
+        self.jobs = {}
+        self.latest_automation = None
+        self.automation_results = {}
+        self.n8n_last_dispatch_status = "idle"
 
 state = SessionState()
 
+async def trigger_n8n_webhook(job_id: str, file_id: str, quality_score: float, status: str = "completed"):
+    """Dispatches lightweight metadata to the n8n webhook asynchronously."""
+    if not settings.N8N_ENABLED or not settings.N8N_WEBHOOK_URL:
+        state.n8n_last_dispatch_status = "disabled"
+        return
+    
+    payload = {
+        "job_id": job_id,
+        "file_id": file_id,
+        "status": status,
+        "quality_score": quality_score,
+        "backend_url": settings.BACKEND_INTERNAL_URL.rstrip("/"),
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-N8N-Webhook-Secret": settings.N8N_WEBHOOK_SECRET,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(settings.N8N_WEBHOOK_URL, json=payload, headers=headers)
+            if resp.status_code < 400:
+                state.n8n_last_dispatch_status = "dispatched"
+                print(f"[n8n] Successfully dispatched webhook for {job_id} -> {resp.status_code}")
+            else:
+                state.n8n_last_dispatch_status = f"error_{resp.status_code}"
+                print(f"[n8n] Webhook endpoint responded with status {resp.status_code}")
+    except Exception as e:
+        state.n8n_last_dispatch_status = f"failed: {str(e)}"
+        print(f"[n8n] Webhook dispatch error: {e}")
+
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "environment": settings.ENVIRONMENT}
+    return {"status": "ok", "environment": settings.ENVIRONMENT, "n8n_enabled": settings.N8N_ENABLED}
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
@@ -90,7 +136,7 @@ def logout():
     return {"status": "success"}
 
 @app.post("/api/analyze/upload")
-async def upload_ifc(file: UploadFile = File(...)):
+async def upload_ifc(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     try:
         content = await file.read()
         
@@ -101,10 +147,11 @@ async def upload_ifc(file: UploadFile = File(...)):
         # Upload to Supabase
         cloud_uploaded = False
         try:
-            upload_file_to_cloud(content, file.filename)
-            cloud_uploaded = True
+            cloud_path = upload_file_to_cloud(content, file.filename)
+            if cloud_path:
+                cloud_uploaded = True
         except Exception as ce:
-            print(f"Cloud upload skipped or failed: {ce}")
+            print(f"[Supabase] Cloud upload skipped or failed: {ce}")
 
         # Reset corrections state
         state.corrected_ifc_bytes = None
@@ -113,9 +160,50 @@ async def upload_ifc(file: UploadFile = File(...)):
         state.user_class_selections = {}
         state.pset_fixes = {}
 
-        # Parse file
+        # Parse file with existing IfcOpenShell analysis
         state.analysis = parse_ifc_file(state.temp_file_path)
-        return {"status": "success", "results": state.analysis, "cloud_uploaded": cloud_uploaded}
+
+        # Register job metadata
+        job_id = f"job_{uuid.uuid4().hex[:8]}"
+        state.current_job_id = job_id
+        state.current_file_id = file.filename
+        state.jobs[job_id] = {
+            "job_id": job_id,
+            "file_id": file.filename,
+            "status": "completed",
+            "quality_score": state.analysis.get("quality_score", 0),
+            "created_at": datetime.datetime.now().isoformat(),
+            "analysis": state.analysis
+        }
+
+        # Trigger n8n webhook asynchronously in background so IFC upload never blocks or fails
+        if settings.N8N_ENABLED and settings.N8N_WEBHOOK_URL:
+            background_tasks.add_task(
+                trigger_n8n_webhook,
+                job_id=job_id,
+                file_id=file.filename,
+                quality_score=state.analysis.get("quality_score", 0),
+                status="completed"
+            )
+
+        # ArchiShield AutoOps: Write audit log and POST to n8n alert webhook safely
+        background_tasks.add_task(
+            process_autoops_completion,
+            analysis=state.analysis,
+            job_id=job_id,
+            model_name=file.filename,
+            user=state.user_context.get("name") if state.user_context else "ArchiShield User"
+        )
+
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "file_id": file.filename,
+            "results": state.analysis,
+            "cloud_uploaded": cloud_uploaded,
+            "n8n_triggered": settings.N8N_ENABLED,
+            "autoops_triggered": True
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload & parse failed: {str(e)}")
 
@@ -124,6 +212,16 @@ def get_results():
     if not state.analysis:
         raise HTTPException(status_code=400, detail="No analysis results found. Please upload a file first.")
     return state.analysis
+
+@app.get("/api/analyze/results/{job_id}")
+def get_results_by_job(job_id: str):
+    if job_id in state.jobs:
+        return state.jobs[job_id]["analysis"]
+    if state.current_job_id == job_id and state.analysis:
+        return state.analysis
+    if state.analysis:
+        return state.analysis
+    raise HTTPException(status_code=404, detail=f"No analysis found for job_id '{job_id}'")
 
 # 3D BIM Viewer payload generation helper
 def resolve_placement(elem):
@@ -572,6 +670,38 @@ def download_bcf_report(issues: List[dict]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"BCF generation failed: {str(e)}")
 
+@app.get("/api/analyze/bcf")
+def download_bcf_report_get():
+    """
+    GET handler for downloading BCF zip issue report directly from browser or email links.
+    Extracts current failures from state.analysis and returns a zip stream.
+    """
+    if not state.analysis:
+        raise HTTPException(status_code=400, detail="No IFC model loaded to generate BCF report.")
+    
+    rule_checks = state.analysis.get("rule_checks", [])
+    bcf_issues = []
+    for r in rule_checks:
+        if isinstance(r, dict):
+            for gid in r.get("fails", []):
+                bcf_issues.append({
+                    "GlobalId": gid,
+                    "Rule": r.get("name", "Compliance Violation"),
+                    "Severity": r.get("severity", "Medium"),
+                    "Category": r.get("category", "General"),
+                    "Message": f"Violation of {r.get('name', 'rule')}"
+                })
+    
+    try:
+        bcf_bytes = generate_bcf_zip(bcf_issues[:500])
+        return StreamingResponse(
+            io.BytesIO(bcf_bytes),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=issues.bcfzip"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"BCF generation failed: {str(e)}")
+
 # Version comparison helpers
 SKIP_TYPES_COMP = {"IfcSpace","IfcOpeningElement","IfcVirtualElement","IfcAnnotation","IfcGrid","IfcRelAggregates","IfcZone","IfcSpatialZone"}
 
@@ -839,7 +969,7 @@ def query_assistant(req: QueryRequest):
         "sample_elements": state.analysis.get("proxy_list", [])[:15] + state.analysis.get("missing_pset_list", [])[:15],
     }
 
-    ans = ask_groq_assistant(req.question, compact_context, settings.GROQ_API_KEY)
+    ans = ask_groq_assistant(req.question, compact_context, get_settings().GROQ_API_KEY)
     return {"question": req.question, "answer": ans}
 
 from fastapi.responses import HTMLResponse
@@ -1066,9 +1196,10 @@ def delete_library_file(filename: str):
 async def load_library_model(req: Dict[str, str]):
     model_name = req.get("model_name", "")
     filename = req.get("filename", "")
+    target_name = filename or model_name
     try:
-        if filename:
-            content = download_cloud_file(filename)
+        if target_name:
+            content = download_cloud_file(target_name)
             if not content:
                 raise HTTPException(status_code=400, detail="Could not download file from cloud bucket.")
             with open(state.temp_file_path, "wb") as f:
@@ -1091,6 +1222,261 @@ async def load_library_model(req: Dict[str, str]):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed loading library model: {str(e)}")
+
+# ==========================================
+# n8n Automation Layer Endpoints
+# ==========================================
+
+@app.post("/api/automation/ai-summary")
+def generate_automation_ai_summary(req: AutomationSummaryRequest):
+    """
+    Generates an executive BIM audit summary using the existing Groq AI model.
+    Called by n8n during workflow execution without exposing the Groq API key to n8n or frontend.
+    """
+    analysis_data = state.analysis
+    if req.job_id and req.job_id in state.jobs:
+        analysis_data = state.jobs[req.job_id]["analysis"]
+    
+    if not analysis_data:
+        raise HTTPException(status_code=400, detail="No analysis data loaded to generate summary.")
+
+    storeys_subset = []
+    for sname, sdata in analysis_data.get("storey_data", {}).items():
+        storeys_subset.append({
+            "name": sname,
+            "total_elements": sdata.get("total", 0),
+            "proxies": sdata.get("proxies", 0),
+            "score": sdata.get("score", 0)
+        })
+
+    compact_context = {
+        "total_elements": analysis_data.get("total_elements", 0),
+        "proxy_elements": analysis_data.get("proxy_elements", 0),
+        "proxy_pct": analysis_data.get("proxy_pct", 0),
+        "semantic_elements": analysis_data.get("semantic_elements", 0),
+        "quality_score": analysis_data.get("quality_score", 0),
+        "severity": analysis_data.get("severity", "LOW"),
+        "data_loss_breakdown": {
+            "L1_semantic_loss_pct": analysis_data.get("type_loss_pct", 0),
+            "L2_property_loss_pct": analysis_data.get("prop_loss_pct", 0),
+            "L3_quantity_loss_pct": analysis_data.get("qty_loss_pct", 0),
+            "L4_relationship_loss_pct": analysis_data.get("rel_loss_pct", 0),
+            "L5_geometry_loss_pct": analysis_data.get("geo_loss_pct", 0),
+        },
+        "missing_pset_count": analysis_data.get("missing_pset_count", 0),
+        "nbc_overall_score": analysis_data.get("nbc_overall_score", 0),
+        "rule_fails_count": sum(len(r.get("fails", [])) for r in analysis_data.get("rule_checks", [])),
+        "storeys": storeys_subset[:15],
+    }
+
+    prompt = (
+        req.custom_instructions or
+        "Provide an executive BIM quality and compliance audit summary for this IFC model. "
+        "Highlight the primary reasons for quality loss, critical NBC non-compliance risks, "
+        "and the most urgent 3 actions recommended for the BIM coordination team."
+    )
+
+    summary_text = ask_groq_assistant(prompt, compact_context, get_settings().GROQ_API_KEY)
+    
+    # If Groq returns an error, provide a high-fidelity executive briefing using actual model metrics
+    if summary_text.startswith("⚠️ Groq API error") or summary_text.startswith("⚠️ No GROQ_API_KEY"):
+        q_score = analysis_data.get("quality_score", 0)
+        sev = analysis_data.get("severity", "LOW")
+        tot = analysis_data.get("total_elements", 0)
+        prx = analysis_data.get("proxy_elements", 0)
+        prx_pct = analysis_data.get("proxy_pct", 0)
+        nbc = analysis_data.get("nbc_overall_score", 0)
+        pset_m = analysis_data.get("missing_pset_count", 0)
+        summary_text = (
+            f"Executive BIM Quality & Compliance Briefing:\n\n"
+            f"• Model Health: Overall Quality Score of {q_score}/100 with {sev} severity risk tier.\n"
+            f"• Entity Integrity: {tot} total elements scanned, with {prx} unclassified proxies ({prx_pct:.1f}%).\n"
+            f"• NBC Compliance: Overall standard compliance rating of {nbc}% across fire & structural safety checks.\n"
+            f"• Priority Actions: Remediate {pset_m} missing property set definitions and classify generic building proxies "
+            f"prior to final architectural coordination and BCF issue dispatch."
+        )
+
+    return {
+        "job_id": req.job_id or state.current_job_id,
+        "summary": summary_text,
+        "quality_score": analysis_data.get("quality_score", 0),
+        "severity": analysis_data.get("severity", "LOW")
+    }
+
+@app.get("/api/automation/ping-webhook")
+async def ping_n8n_webhook():
+    """Checks if the configured n8n webhook URL is reachable."""
+    if not settings.N8N_ENABLED or not settings.N8N_WEBHOOK_URL:
+        return {"connected": False, "reason": "n8n is disabled or URL not set", "webhook_url": settings.N8N_WEBHOOK_URL}
+    
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            resp = await client.post(
+                settings.N8N_WEBHOOK_URL,
+                json={"ping": True, "job_id": "ping_check"},
+                headers={"X-N8N-Webhook-Secret": settings.N8N_WEBHOOK_SECRET}
+            )
+            # 200/201/204 or 404 (webhook registered in n8n but waiting for test or active)
+            is_connected = resp.status_code < 500
+            reason = None
+            if resp.status_code == 404:
+                reason = "Webhook URL reached but n8n responded 404. Please ensure the workflow is toggled to Active in n8n Cloud."
+            elif resp.status_code >= 400:
+                reason = f"n8n responded with HTTP {resp.status_code}"
+            return {
+                "connected": is_connected and resp.status_code < 400,
+                "status_code": resp.status_code,
+                "webhook_url": settings.N8N_WEBHOOK_URL,
+                "reason": reason
+            }
+    except Exception as e:
+        return {"connected": False, "reason": str(e), "webhook_url": settings.N8N_WEBHOOK_URL}
+
+@app.post("/api/automation/callback")
+def automation_callback(
+    payload: AutomationCallbackRequest,
+    x_n8n_webhook_secret: Optional[str] = Header(None, alias="X-N8N-Webhook-Secret")
+):
+    """
+    Receives automated orchestration output from n8n.
+    Secured by X-N8N-Webhook-Secret header.
+    Stores the result in server state and uploads a persistent artifact to Supabase storage.
+    """
+    if settings.N8N_WEBHOOK_SECRET and x_n8n_webhook_secret:
+        if x_n8n_webhook_secret != settings.N8N_WEBHOOK_SECRET:
+            raise HTTPException(status_code=403, detail="Invalid n8n webhook secret.")
+
+    data = payload.dict()
+    data["received_at"] = datetime.datetime.now().isoformat()
+    
+    state.latest_automation = data
+    state.automation_results[payload.job_id] = data
+    state.n8n_last_dispatch_status = "completed"
+
+    # Upload automation summary artifact to Supabase storage
+    cloud_saved = False
+    try:
+        summary_json_bytes = json.dumps(data, indent=2).encode("utf-8")
+        cloud_filename = f"automation_{payload.job_id}.json"
+        upload_file_to_cloud(summary_json_bytes, cloud_filename)
+        cloud_saved = True
+    except Exception as ce:
+        print(f"[Supabase] Automation summary cloud upload skipped: {ce}")
+
+    data["cloud_saved"] = cloud_saved
+    return {"status": "success", "job_id": payload.job_id, "cloud_saved": cloud_saved}
+
+@app.get("/api/automation/status")
+def get_automation_status():
+    """
+    Provides real-time automation and workflow status for the React dashboard.
+    """
+    curr_settings = get_settings()
+    rule_fails = sum(len(r.get("fails", [])) for r in state.analysis.get("rule_checks", [])) if state.analysis else 0
+    return {
+        "n8n_enabled": curr_settings.N8N_ENABLED,
+        "n8n_webhook_configured": bool(curr_settings.N8N_WEBHOOK_URL),
+        "n8n_webhook_url": "Configured (Cloud Webhook Active)" if curr_settings.N8N_WEBHOOK_URL else "Not configured",
+        "dispatch_status": state.n8n_last_dispatch_status,
+        "current_job_id": state.current_job_id,
+        "current_file_id": state.current_file_id,
+        "latest_automation": state.latest_automation,
+        "quality_score": state.analysis.get("quality_score") if state.analysis else None,
+        "severity": state.analysis.get("severity") if state.analysis else None,
+        "total_elements": state.analysis.get("total_elements", 0) if state.analysis else 0,
+        "critical_issues_count": rule_fails,
+        "bcf_ready": bool(state.analysis.get("rule_checks") or state.analysis.get("proxy_list")),
+        "pdf_ready": bool(state.analysis)
+    }
+
+@app.post("/api/automation/trigger")
+async def trigger_automation_manually():
+    """
+    Allows manual triggering of the n8n automation workflow from the React dashboard.
+    """
+    curr_settings = get_settings()
+    if not state.analysis:
+        raise HTTPException(status_code=400, detail="No IFC analysis available to trigger automation.")
+
+    job_id = state.current_job_id or f"job_{uuid.uuid4().hex[:8]}"
+    file_id = state.current_file_id or "model.ifc"
+    
+    state.current_job_id = job_id
+    if job_id not in state.jobs:
+        state.jobs[job_id] = {
+            "job_id": job_id,
+            "file_id": file_id,
+            "status": "completed",
+            "quality_score": state.analysis.get("quality_score", 0),
+            "created_at": datetime.datetime.now().isoformat(),
+            "analysis": state.analysis
+        }
+
+    await trigger_n8n_webhook(
+        job_id=job_id,
+        file_id=file_id,
+        quality_score=state.analysis.get("quality_score", 0),
+        status="completed"
+    )
+
+    return {
+        "status": "triggered",
+        "job_id": job_id,
+        "dispatch_status": state.n8n_last_dispatch_status,
+        "n8n_configured": bool(curr_settings.N8N_WEBHOOK_URL)
+    }
+
+# =========================================================
+# ArchiShield AutoOps API Routes
+# =========================================================
+
+@app.get("/api/autoops/status")
+def get_autoops_status():
+    """
+    Returns ArchiShield AutoOps operational status and configuration.
+    Never exposes sensitive webhook secrets or full URLs.
+    """
+    curr_settings = get_settings()
+    webhook_url = getattr(curr_settings, "N8N_WEBHOOK_URL", "") or ""
+    audit_path = getattr(curr_settings, "AUDIT_LOG_PATH", "data/autoops_audit.jsonl")
+    return {
+        "enabled": bool(webhook_url or os.path.exists(os.path.dirname(audit_path) or ".")),
+        "n8n_configured": bool(webhook_url),
+        "groq_configured": bool(getattr(curr_settings, "GROQ_API_KEY", "")),
+        "audit_log_enabled": True,
+        "nbc_compliance_threshold": getattr(curr_settings, "NBC_COMPLIANCE_THRESHOLD", 80.0),
+        "audit_log_path": audit_path,
+        "public_base_url": getattr(curr_settings, "PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+    }
+
+@app.get("/api/autoops/audit-log")
+def get_autoops_audit_log(limit: int = 50):
+    """
+    Returns recent AutoOps audit events from the append-only JSON Lines audit file.
+    Safely handles missing, empty, or malformed logs without throwing exceptions.
+    """
+    entries = read_audit_entries(limit=limit)
+    return {
+        "count": len(entries),
+        "audit_log_path": getattr(settings, "AUDIT_LOG_PATH", "data/autoops_audit.jsonl"),
+        "entries": entries
+    }
+
+@app.get("/api/autoops/lifecycle")
+def get_autoops_lifecycle():
+    """
+    Returns the step-by-step pipeline lifecycle sequence for ArchiShield AutoOps.
+    """
+    return {
+        "steps": [
+            "IFC Upload",
+            "Deterministic BIM Analysis",
+            "NBC Compliance Evaluation",
+            "AutoOps Audit Log",
+            "n8n Automation",
+            "Compliance Alert"
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn

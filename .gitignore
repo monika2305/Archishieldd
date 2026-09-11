@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 .env
+backend/.env
+backend/data/*.jsonl
+backend/data/supabase_storage_local/
 *.egg-info/
 
 # Large IFC files — too big for git

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: archishield-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: ENVIRONMENT
+        value: production
+      - key: N8N_ENABLED
+        value: "true"
+      - key: N8N_WEBHOOK_URL
+        value: "https://architechs.app.n8n.cloud/webhook/archishield-analysis"
+      - key: N8N_WEBHOOK_SECRET
+        value: "archishield-n8n-secret-2026"
+      - key: NBC_COMPLIANCE_THRESHOLD
+        value: "80"
+      - key: SUPABASE_URL
+        value: "https://ufttkgyvhmwvskklaxne.supabase.co"
+      - key: SUPABASE_KEY
+        value: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVmdHRrZ3l2aG13dnNra2xheG5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwODA4MjksImV4cCI6MjA5NjY1MjgyOX0.CXRJJdQn21ouipdmBgoTE37L-d5KKfML1YKlWxZGN1E"
+      - key: SUPABASE_BUCKET
+        value: "innovescence-ifc-files"

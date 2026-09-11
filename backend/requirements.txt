@@ -10,3 +10,5 @@ groq
 python-dotenv
 numpy
 supabase
+httpx
+requests

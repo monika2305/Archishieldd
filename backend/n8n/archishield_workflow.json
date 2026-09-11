@@ -1,0 +1,285 @@
+{
+  "name": "ArchiShield Analysis Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "archishield-analysis",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "node-webhook-analysis-completed",
+      "name": "Analysis Completed Webhook"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.body.backend_url || 'http://localhost:8001' }}/api/analyze/results/{{ $json.body.job_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Webhook-Secret",
+              "value": "archishield-n8n-secret-2026"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "id": "node-fetch-analysis-result",
+      "name": "Fetch Analysis Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-quality-score",
+              "leftValue": "={{ $json.quality_score }}",
+              "rightValue": 70,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            },
+            {
+              "id": "cond-severity-critical",
+              "leftValue": "={{ $json.severity }}",
+              "rightValue": "CRITICAL",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "cond-severity-high",
+              "leftValue": "={{ $json.severity }}",
+              "rightValue": "HIGH",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        700,
+        300
+      ],
+      "id": "node-critical-or-high-issues",
+      "name": "Critical or High Issues?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Analysis Completed Webhook').item.json.body.backend_url || 'http://localhost:8001' }}/api/automation/ai-summary",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Webhook-Secret",
+              "value": "archishield-n8n-secret-2026"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"job_id\": \"{{ $('Analysis Completed Webhook').item.json.body.job_id }}\",\n  \"custom_instructions\": \"Critical / High Risk Audit: Highlight major IFC semantic flaws, NBC fire & structural compliance violations, and immediate action items.\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        180
+      ],
+      "id": "node-generate-ai-summary",
+      "name": "Generate AI Summary"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Analysis Completed Webhook').item.json.body.backend_url || 'http://localhost:8001' }}/api/automation/callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Webhook-Secret",
+              "value": "archishield-n8n-secret-2026"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"job_id\": \"{{ $('Analysis Completed Webhook').item.json.body.job_id }}\",\n  \"file_id\": \"{{ $('Analysis Completed Webhook').item.json.body.file_id || 'model.ifc' }}\",\n  \"status\": \"completed\",\n  \"quality_score\": {{ $('Fetch Analysis Result').item.json.quality_score || 0 }},\n  \"severity\": \"{{ $('Fetch Analysis Result').item.json.severity || 'HIGH' }}\",\n  \"summary\": \"{{ $json.summary }}\",\n  \"critical_issues_count\": {{ ($('Fetch Analysis Result').item.json.rule_checks || []).reduce((acc, r) => acc + ((r.fails && Array.isArray(r.fails)) ? r.fails.length : 0), 0) }},\n  \"requires_immediate_action\": true,\n  \"details\": {\n    \"risk_tier\": \"Critical/High\",\n    \"orchestrated_by\": \"n8n Automation Layer\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        180
+      ],
+      "id": "node-send-callback-severe",
+      "name": "Send Callback (Severe)"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"processed\",\n  \"outcome\": \"severe_issues_flagged\",\n  \"job_id\": \"{{ $('Analysis Completed Webhook').item.json.body.job_id }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        180
+      ],
+      "id": "node-respond-severe",
+      "name": "Respond (Severe)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Analysis Completed Webhook').item.json.body.backend_url || 'http://localhost:8001' }}/api/automation/callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Webhook-Secret",
+              "value": "archishield-n8n-secret-2026"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"job_id\": \"{{ $('Analysis Completed Webhook').item.json.body.job_id }}\",\n  \"file_id\": \"{{ $('Analysis Completed Webhook').item.json.body.file_id || 'model.ifc' }}\",\n  \"status\": \"completed\",\n  \"quality_score\": {{ $json.quality_score || 0 }},\n  \"severity\": \"{{ $json.severity || 'LOW' }}\",\n  \"summary\": \"Clear Model: Quality score is optimal and within acceptable compliance limits. Building elements, property sets, and geometry integrity are verified. No immediate remediation is required.\",\n  \"critical_issues_count\": 0,\n  \"requires_immediate_action\": false,\n  \"details\": {\n    \"risk_tier\": \"Clear\",\n    \"orchestrated_by\": \"n8n Automation Layer\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        420
+      ],
+      "id": "node-send-callback-clear",
+      "name": "Send Callback (Clear)"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"processed\",\n  \"outcome\": \"clear_model_verified\",\n  \"job_id\": \"{{ $('Analysis Completed Webhook').item.json.body.job_id }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        420
+      ],
+      "id": "node-respond-clear",
+      "name": "Respond (Clear)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Analysis Completed Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Analysis Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Analysis Result": {
+      "main": [
+        [
+          {
+            "node": "Critical or High Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical or High Issues?": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Callback (Clear)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Callback (Severe)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Callback (Severe)": {
+      "main": [
+        [
+          {
+            "node": "Respond (Severe)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Callback (Clear)": {
+      "main": [
+        [
+          {
+            "node": "Respond (Clear)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
