@@ -139,8 +139,12 @@ export default function HomeDashboard({
   };
 
   const handleDownloadSample = () => {
-    // Standard mock file trigger or fetch from backend
-    window.open(`${API_BASE_URL}/api/analyze/download-sample`, "_blank");
+    const link = document.createElement("a");
+    link.href = "/samples/sample_model.ifc";
+    link.download = "sample_model.ifc";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleDownloadPDF = () => {

@@ -315,8 +315,8 @@ export default function App() {
                   👇 Don't have an IFC file? Download our sample model and upload it above.
                 </p>
                 <a 
-                  href={`${API_BASE_URL}/api/analyze/download-sample`} 
-                  download 
+                  href="/samples/sample_model.ifc" 
+                  download="sample_model.ifc" 
                   className="btn-secondary" 
                   style={{ display: "inline-block", fontSize: "12px", textDecoration: "none", padding: "10px 20px" }}
                 >

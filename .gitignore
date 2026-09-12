@@ -10,6 +10,7 @@ backend/data/supabase_storage_local/
 
 # Large IFC files — too big for git
 *.ifc
+!frontend/public/samples/*.ifc
 
 # Node
 frontend/node_modules/
